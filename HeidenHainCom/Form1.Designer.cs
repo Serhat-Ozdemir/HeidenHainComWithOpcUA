@@ -28,13 +28,26 @@
             btnSelectProgram = new Button();
             btnStart = new Button();
             btnStop = new Button();
-            btnReset = new Button();
+            btnDeselect = new Button();
             lstLog = new ListBox();
             lblLog = new Label();
             btnClearLog = new Button();
             lblSep = new Label();
             treeOpc = new TreeView();
             rtbValue = new RichTextBox();
+            btnDisconnect = new Button();
+            btnWrite = new Button();
+            btnCancel = new Button();
+            btnCreateDirectory = new Button();
+            btnCreateFile = new Button();
+            btnDelete = new Button();
+            btnMoveOrCopy = new Button();
+            btnWriteFile = new Button();
+            btnReadFile = new Button();
+            btnClose = new Button();
+            btnOpen = new Button();
+            btnSetPosition = new Button();
+            btnGetPosition = new Button();
             SuspendLayout();
             // 
             // txtServer
@@ -54,10 +67,9 @@
             // txtValue
             // 
             txtValue.BackColor = Color.White;
-            txtValue.Location = new Point(650, 65);
+            txtValue.Location = new Point(664, 65);
             txtValue.Name = "txtValue";
-            txtValue.ReadOnly = true;
-            txtValue.Size = new Size(220, 31);
+            txtValue.Size = new Size(206, 31);
             txtValue.TabIndex = 8;
             // 
             // lblStatus
@@ -65,7 +77,7 @@
             lblStatus.AutoSize = true;
             lblStatus.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             lblStatus.ForeColor = Color.Gray;
-            lblStatus.Location = new Point(600, 20);
+            lblStatus.Location = new Point(727, 18);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(143, 25);
             lblStatus.TabIndex = 3;
@@ -155,11 +167,11 @@
             btnSelectProgram.ForeColor = Color.White;
             btnSelectProgram.Location = new Point(465, 183);
             btnSelectProgram.Name = "btnSelectProgram";
-            btnSelectProgram.Size = new Size(140, 35);
+            btnSelectProgram.Size = new Size(151, 35);
             btnSelectProgram.TabIndex = 13;
             btnSelectProgram.Text = "Select Program";
             btnSelectProgram.UseVisualStyleBackColor = false;
-            btnSelectProgram.Click += btnSelectProgram_Click;
+            btnSelectProgram.Click += btnSelectProgramByNodeId_Click;
             // 
             // btnStart
             // 
@@ -189,19 +201,19 @@
             btnStop.UseVisualStyleBackColor = false;
             btnStop.Click += btnStop_Click;
             // 
-            // btnReset
+            // btnDeselect
             // 
-            btnReset.BackColor = Color.FromArgb(255, 152, 0);
-            btnReset.Enabled = false;
-            btnReset.FlatStyle = FlatStyle.Flat;
-            btnReset.ForeColor = Color.White;
-            btnReset.Location = new Point(400, 235);
-            btnReset.Name = "btnReset";
-            btnReset.Size = new Size(130, 40);
-            btnReset.TabIndex = 16;
-            btnReset.Text = "↺  RESET";
-            btnReset.UseVisualStyleBackColor = false;
-            btnReset.Click += btnReset_Click;
+            btnDeselect.BackColor = Color.FromArgb(255, 152, 0);
+            btnDeselect.Enabled = false;
+            btnDeselect.FlatStyle = FlatStyle.Flat;
+            btnDeselect.ForeColor = Color.White;
+            btnDeselect.Location = new Point(400, 235);
+            btnDeselect.Name = "btnDeselect";
+            btnDeselect.Size = new Size(130, 40);
+            btnDeselect.TabIndex = 16;
+            btnDeselect.Text = "↺  DESELECT";
+            btnDeselect.UseVisualStyleBackColor = false;
+            btnDeselect.Click += btnDeselect_Click;
             // 
             // lstLog
             // 
@@ -255,11 +267,200 @@
             rtbValue.TabIndex = 20;
             rtbValue.Text = "";
             // 
+            // btnDisconnect
+            // 
+            btnDisconnect.BackColor = Color.Red;
+            btnDisconnect.FlatStyle = FlatStyle.Flat;
+            btnDisconnect.ForeColor = Color.White;
+            btnDisconnect.Location = new Point(591, 13);
+            btnDisconnect.Name = "btnDisconnect";
+            btnDisconnect.Size = new Size(120, 35);
+            btnDisconnect.TabIndex = 21;
+            btnDisconnect.Text = "Disconnect";
+            btnDisconnect.UseVisualStyleBackColor = false;
+            btnDisconnect.Click += btnDisconnect_Click;
+            // 
+            // btnWrite
+            // 
+            btnWrite.Location = new Point(889, 65);
+            btnWrite.Name = "btnWrite";
+            btnWrite.Size = new Size(120, 35);
+            btnWrite.TabIndex = 22;
+            btnWrite.Text = "Write";
+            btnWrite.Click += btnWrite_Click;
+            // 
+            // btnCancel
+            // 
+            btnCancel.BackColor = Color.Thistle;
+            btnCancel.Enabled = false;
+            btnCancel.FlatStyle = FlatStyle.Flat;
+            btnCancel.ForeColor = Color.White;
+            btnCancel.Location = new Point(548, 235);
+            btnCancel.Name = "btnCancel";
+            btnCancel.Size = new Size(130, 40);
+            btnCancel.TabIndex = 23;
+            btnCancel.Text = "X  CANCEL";
+            btnCancel.UseVisualStyleBackColor = false;
+            btnCancel.Click += btnCancel_Click;
+            // 
+            // btnCreateDirectory
+            // 
+            btnCreateDirectory.BackColor = Color.FromArgb(33, 150, 243);
+            btnCreateDirectory.Enabled = false;
+            btnCreateDirectory.FlatStyle = FlatStyle.Flat;
+            btnCreateDirectory.ForeColor = Color.White;
+            btnCreateDirectory.Location = new Point(1225, 600);
+            btnCreateDirectory.Name = "btnCreateDirectory";
+            btnCreateDirectory.Size = new Size(160, 35);
+            btnCreateDirectory.TabIndex = 24;
+            btnCreateDirectory.Text = "Create Directory";
+            btnCreateDirectory.UseVisualStyleBackColor = false;
+            btnCreateDirectory.Click += btnCreateDirectory_Click;
+            // 
+            // btnCreateFile
+            // 
+            btnCreateFile.BackColor = Color.FromArgb(33, 150, 243);
+            btnCreateFile.Enabled = false;
+            btnCreateFile.FlatStyle = FlatStyle.Flat;
+            btnCreateFile.ForeColor = Color.White;
+            btnCreateFile.Location = new Point(1225, 650);
+            btnCreateFile.Name = "btnCreateFile";
+            btnCreateFile.Size = new Size(160, 35);
+            btnCreateFile.TabIndex = 25;
+            btnCreateFile.Text = "Create File";
+            btnCreateFile.UseVisualStyleBackColor = false;
+            btnCreateFile.Click += btnCreateFile_Click;
+            // 
+            // btnDelete
+            // 
+            btnDelete.BackColor = Color.FromArgb(33, 150, 243);
+            btnDelete.Enabled = false;
+            btnDelete.FlatStyle = FlatStyle.Flat;
+            btnDelete.ForeColor = Color.White;
+            btnDelete.Location = new Point(1225, 700);
+            btnDelete.Name = "btnDelete";
+            btnDelete.Size = new Size(160, 35);
+            btnDelete.TabIndex = 26;
+            btnDelete.Text = "Delete";
+            btnDelete.UseVisualStyleBackColor = false;
+            btnDelete.Click += btnDelete_Click;
+            // 
+            // btnMoveOrCopy
+            // 
+            btnMoveOrCopy.BackColor = Color.FromArgb(33, 150, 243);
+            btnMoveOrCopy.Enabled = false;
+            btnMoveOrCopy.FlatStyle = FlatStyle.Flat;
+            btnMoveOrCopy.ForeColor = Color.White;
+            btnMoveOrCopy.Location = new Point(1225, 750);
+            btnMoveOrCopy.Name = "btnMoveOrCopy";
+            btnMoveOrCopy.Size = new Size(160, 35);
+            btnMoveOrCopy.TabIndex = 27;
+            btnMoveOrCopy.Text = "MoveOrCopy";
+            btnMoveOrCopy.UseVisualStyleBackColor = false;
+            btnMoveOrCopy.Click += btnMoveOrCopy_Click;
+            // 
+            // btnWriteFile
+            // 
+            btnWriteFile.BackColor = Color.FromArgb(33, 150, 243);
+            btnWriteFile.Enabled = false;
+            btnWriteFile.FlatStyle = FlatStyle.Flat;
+            btnWriteFile.ForeColor = Color.White;
+            btnWriteFile.Location = new Point(1430, 750);
+            btnWriteFile.Name = "btnWriteFile";
+            btnWriteFile.Size = new Size(160, 35);
+            btnWriteFile.TabIndex = 31;
+            btnWriteFile.Text = "Write";
+            btnWriteFile.UseVisualStyleBackColor = false;
+            btnWriteFile.Click += btnWriteFile_Click;
+            // 
+            // btnReadFile
+            // 
+            btnReadFile.BackColor = Color.FromArgb(33, 150, 243);
+            btnReadFile.Enabled = false;
+            btnReadFile.FlatStyle = FlatStyle.Flat;
+            btnReadFile.ForeColor = Color.White;
+            btnReadFile.Location = new Point(1430, 700);
+            btnReadFile.Name = "btnReadFile";
+            btnReadFile.Size = new Size(160, 35);
+            btnReadFile.TabIndex = 30;
+            btnReadFile.Text = "Read";
+            btnReadFile.UseVisualStyleBackColor = false;
+            btnReadFile.Click += btnReadFile_Click;
+            // 
+            // btnClose
+            // 
+            btnClose.BackColor = Color.FromArgb(33, 150, 243);
+            btnClose.Enabled = false;
+            btnClose.FlatStyle = FlatStyle.Flat;
+            btnClose.ForeColor = Color.White;
+            btnClose.Location = new Point(1430, 650);
+            btnClose.Name = "btnClose";
+            btnClose.Size = new Size(160, 35);
+            btnClose.TabIndex = 29;
+            btnClose.Text = "Close";
+            btnClose.UseVisualStyleBackColor = false;
+            btnClose.Click += btnClose_Click;
+            // 
+            // btnOpen
+            // 
+            btnOpen.BackColor = Color.FromArgb(33, 150, 243);
+            btnOpen.Enabled = false;
+            btnOpen.FlatStyle = FlatStyle.Flat;
+            btnOpen.ForeColor = Color.White;
+            btnOpen.Location = new Point(1430, 600);
+            btnOpen.Name = "btnOpen";
+            btnOpen.Size = new Size(160, 35);
+            btnOpen.TabIndex = 28;
+            btnOpen.Text = "Open";
+            btnOpen.UseVisualStyleBackColor = false;
+            btnOpen.Click += btnOpen_Click;
+            // 
+            // btnSetPosition
+            // 
+            btnSetPosition.BackColor = Color.FromArgb(33, 150, 243);
+            btnSetPosition.Enabled = false;
+            btnSetPosition.FlatStyle = FlatStyle.Flat;
+            btnSetPosition.ForeColor = Color.White;
+            btnSetPosition.Location = new Point(1430, 850);
+            btnSetPosition.Name = "btnSetPosition";
+            btnSetPosition.Size = new Size(160, 35);
+            btnSetPosition.TabIndex = 33;
+            btnSetPosition.Text = "Set Position";
+            btnSetPosition.UseVisualStyleBackColor = false;
+            btnSetPosition.Click += btnSetPosition_Click;
+            // 
+            // btnGetPosition
+            // 
+            btnGetPosition.BackColor = Color.FromArgb(33, 150, 243);
+            btnGetPosition.Enabled = false;
+            btnGetPosition.FlatStyle = FlatStyle.Flat;
+            btnGetPosition.ForeColor = Color.White;
+            btnGetPosition.Location = new Point(1430, 800);
+            btnGetPosition.Name = "btnGetPosition";
+            btnGetPosition.Size = new Size(160, 35);
+            btnGetPosition.TabIndex = 32;
+            btnGetPosition.Text = "Get Position";
+            btnGetPosition.UseVisualStyleBackColor = false;
+            btnGetPosition.Click += btnGetPosition_Click;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(10F, 25F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1896, 1099);
+            Controls.Add(btnSetPosition);
+            Controls.Add(btnGetPosition);
+            Controls.Add(btnWriteFile);
+            Controls.Add(btnReadFile);
+            Controls.Add(btnClose);
+            Controls.Add(btnOpen);
+            Controls.Add(btnMoveOrCopy);
+            Controls.Add(btnDelete);
+            Controls.Add(btnCreateFile);
+            Controls.Add(btnCreateDirectory);
+            Controls.Add(btnCancel);
+            Controls.Add(btnWrite);
+            Controls.Add(btnDisconnect);
             Controls.Add(rtbValue);
             Controls.Add(treeOpc);
             Controls.Add(lblServer);
@@ -278,7 +479,7 @@
             Controls.Add(btnSelectProgram);
             Controls.Add(btnStart);
             Controls.Add(btnStop);
-            Controls.Add(btnReset);
+            Controls.Add(btnDeselect);
             Controls.Add(lblLog);
             Controls.Add(lstLog);
             Controls.Add(btnClearLog);
@@ -307,12 +508,25 @@
         private Button btnSelectProgram;
         private Button btnStart;
         private Button btnStop;
-        private Button btnReset;
+        private Button btnDeselect;
         private Label lblLog;
         private ListBox lstLog;
         private Button btnClearLog;
         private Label lblSep;
         private TreeView treeOpc;
         private RichTextBox rtbValue;
+        private Button btnDisconnect;
+        private Button btnWrite;
+        private Button btnCancel;
+        private Button btnCreateDirectory;
+        private Button btnCreateFile;
+        private Button btnDelete;
+        private Button btnMoveOrCopy;
+        private Button btnWriteFile;
+        private Button btnReadFile;
+        private Button btnClose;
+        private Button btnOpen;
+        private Button btnSetPosition;
+        private Button btnGetPosition;
     }
 }

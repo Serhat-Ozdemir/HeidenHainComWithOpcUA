@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Opc.Ua;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -34,6 +35,7 @@ namespace OPCUaClient.Objects
 
         public int Identifier { get; set; }
 
+        public NodeClass NodeClass { get; set; }
         /// <summary>
         /// Groups into the group <see cref="Group"/>
         /// </summary>

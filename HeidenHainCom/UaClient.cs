@@ -16,7 +16,7 @@ namespace OPCUaClient
         #region Private Fields
 
         private readonly ConfiguredEndpoint _endpoint;
-        private Session? _session = null;
+        public Session? _session = null;
         private readonly UserIdentity _userIdentity;
         private readonly ApplicationConfiguration _appConfig;
         private const int ReconnectPeriod = 10000;
@@ -305,13 +305,13 @@ namespace OPCUaClient
         /// Value to write
         /// </param>
         /// <exception cref="WriteException"></exception>
-        public void Write(String address, Object value)
+        public void Write(Group grp, Object value)
         {
             WriteValueCollection writeValues = new WriteValueCollection();
             var writeValue = new WriteValue
             {
-                NodeId = new NodeId(address, 2),
-                AttributeId = Attributes.Value,
+                NodeId = new NodeId((uint)grp.Identifier, (ushort)grp.NameSpaceIndex),
+                AttributeId = 7,
                 Value = new DataValue
                 {
                     Value = value
@@ -334,7 +334,7 @@ namespace OPCUaClient
         /// <exception cref="WriteException"></exception>
         public void Write(Tag tag)
         {
-            this.Write(tag.Address, tag.Value);
+            //this.Write(tag.Address, tag.Value);
         }
 
 
@@ -522,30 +522,39 @@ namespace OPCUaClient
             return tags;
         }
 
-        public void CallMethod(uint objectId, uint methodId, params object[] inputArguments)
+        public IList<object> CallMethod(NodeId objectId, NodeId methodId, params object[] inputArguments)
         {
-            var objectNode = new NodeId(100010, 1);
-            var methodNode = new NodeId(100012, 1);
+            if(this._session == null || !this._session.Connected)
+                throw new InvalidOperationException("Not connected to the server.");
 
-            var inputArgs = new VariantCollection
-{
-    new Variant("/mnt/tnc/nc_prog/demo/Start_demo.h")
-};
+            var inputArgs = new VariantCollection(
+                inputArguments.Select(arg => new Variant(arg))
+            );
 
             _session.Call(
                 null,
                 new CallMethodRequestCollection
                 {
-        new CallMethodRequest
-        {
-            ObjectId = objectNode,
-            MethodId = methodNode,
-            InputArguments = inputArgs
-        }
+            new CallMethodRequest
+            {
+                ObjectId = objectId,
+                MethodId = methodId,
+                InputArguments = inputArgs
+            }
                 },
                 out var results,
                 out var diagnosticInfos
             );
+
+            if (results == null || results.Count == 0)
+                throw new Exception("No result returned from method call.");
+
+            if (StatusCode.IsBad(results[0].StatusCode))
+                throw new Exception($"Method call failed: {results[0].StatusCode}");
+
+            return results[0].OutputArguments
+                .Select(v => v.Value)
+                .ToList();
         }
 
         /// <summary>
@@ -694,7 +703,8 @@ namespace OPCUaClient
                 {
                     Address = address + "." + result.BrowseName.Name,
                     Identifier = childIdentifier,
-                    NameSpaceIndex = childNodeId.NamespaceIndex
+                    NameSpaceIndex = childNodeId.NamespaceIndex,
+                    NodeClass = result.NodeClass
                 };
                 if (group.Address == "HEIDENHAIN NC.Machine.FileSystem.TNC" || group.Address == "HEIDENHAIN NC.Machine.ToolDataManagement")
                 {
