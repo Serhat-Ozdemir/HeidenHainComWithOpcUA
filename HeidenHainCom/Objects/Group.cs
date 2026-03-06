@@ -14,17 +14,10 @@ namespace OPCUaClient.Objects
     /// </summary>
     public class Group
     {
-
         /// <summary>
         /// Name of the group
         /// </summary>
-        public String Name
-        {
-            get
-            {
-                return this.Address.Substring(this.Address.LastIndexOf(".") + 1);
-            }
-        }
+        public String Name { get; set; }
 
         /// <summary>
         /// Address of the group
@@ -36,6 +29,7 @@ namespace OPCUaClient.Objects
         public int Identifier { get; set; }
 
         public NodeClass NodeClass { get; set; }
+
         /// <summary>
         /// Groups into the group <see cref="Group"/>
         /// </summary>

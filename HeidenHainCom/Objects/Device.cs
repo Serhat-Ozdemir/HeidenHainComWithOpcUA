@@ -17,13 +17,7 @@ namespace OPCUaClient.Objects
         /// <summary>
         /// Name of the device
         /// </summary>
-        public String Name
-        {
-            get
-            {
-                return this.Address.Substring(this.Address.LastIndexOf(".") + 1);
-            }
-        }
+        public String Name {get; set; }
         /// <summary>
         /// Address of the device
         /// </summary>

@@ -1,1005 +1,693 @@
-using Opc.Ua;
+﻿using Opc.Ua;
 using OPCUaClient;
 using OPCUaClient.Objects;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
 
 namespace HeidenHainCom
 {
     public partial class Form1 : Form
     {
+        // ─────────────────────────────────────────────────────────────────────
+        // Inner types
+        // ─────────────────────────────────────────────────────────────────────
 
-        // TNC7 Tag Addresses
-        // Run "Browse" on your simulation first to confirm exact addresses.
-        // Common TNC7 OPC UA tag paths are listed below � adjust if needed.
+        public enum OperatingMode
+        {
+            Manual = 0, MDI = 1, RFP = 2, SingleStep = 3,
+            Automatic = 4, Other = 5, Handwheel = 6
+        }
 
-        private const string TAG_SELECT_PROGRAM = "/Plc/Program/SelectProgram";
-        private const string TAG_PGM_SELECT = "/Plc/Program/PgmSelect";
-        private const string TAG_START = "/Plc/Program/Start";
-        private const string TAG_STOP = "/Plc/Program/Stop";
-        private const string TAG_RESET = "/Plc/Program/Reset";
+        private struct StatusSnapshot
+        {
+            public string ActiveProgram;
+            public string CurrentState;
+            public string CurrentToolName;
+            public int CounterCurrent;
+            public int CounterTarget;
+            public double SpindleNominalSpeed;
+            public string OperationMode;
+            public double FeedOverride;
+            public double RapidOverride;
+            public double SpeedOverride;
+        }
 
-        private Group selectedGroup;
-        private UaClient? _client;
+        // ─────────────────────────────────────────────────────────────────────
+        // Fields
+        // ─────────────────────────────────────────────────────────────────────
 
-        private uint _currentFileHandle = 0;
-        private uint _currentFileNodeId = 0;
+        private UaClient _client;
+        private Group _selectedNode;
+        private readonly Dictionary<string, Group> _statusNodes = new();
+        private CancellationTokenSource _monitorCts;
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Constructor
+        // ─────────────────────────────────────────────────────────────────────
+
         public Form1()
         {
             InitializeComponent();
-            selectedGroup = new Group();
-            txtServer.Text = "opc.tcp://192.168.56.101:4840";
+
+            treeDevices.AfterSelect += TreeDevices_AfterSelect;
+            treeDevices.AfterExpand += TreeDevices_AfterExpand;
+            lstErrors.DoubleClick += LstErrors_DoubleClick;
+            btnRefresh.Click += BtnRefresh_Click;
+            btnCycleStart.Click += BtnCycleStart_Click;
+            btnCycleStop.Click += BtnCycleStop_Click;
+            btnSave.Click += BtnSave_Click;
+            btnReconnect.Click += BtnReconnect_Click;
+            btnDisconnectMonitor.Click += BtnDisconnectMonitor_Click;
+            btnConnect.Click += BtnConnect_Click;
+            btnDisconnect.Click += BtnDisconnectBar_Click;
+            this.FormClosing += Form1_FormClosing;
+
+            this.KeyPreview = true;
+            this.KeyDown += (s, e) =>
+            {
+                if (e.Control && e.KeyCode == Keys.S) BtnSave_Click(s, EventArgs.Empty);
+            };
         }
 
-        // Helpers
+        // ─────────────────────────────────────────────────────────────────────
+        // Connect / Disconnect (top bar)
+        // ─────────────────────────────────────────────────────────────────────
 
-        private void Log(string message)
+        private void BtnConnect_Click(object sender, EventArgs e) => Connect();
+
+        private void Connect()
         {
-            if (lstLog.InvokeRequired) { lstLog.Invoke(() => Log(message)); return; }
-            lstLog.Text = $"[{DateTime.Now:HH:mm:ss}] {message}";
-            txtStatus.Text = message;
-        }
-        private void ShowValue(string message)
-        {
-            if (rtbValue.InvokeRequired) { lstLog.Invoke(() => ShowValue(message)); return; }
-            rtbValue.Text = message;
-        }
+            if (string.IsNullOrWhiteSpace(txtServerCertPath.Text))
+            {
+                MessageBox.Show("Please select a Server Certificate (.der) file before connecting.",
+                    "Missing Certificate", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(txtCertPath.Text))
+            {
+                MessageBox.Show("Please select a User Certificate (.der) file before connecting.",
+                    "Missing Certificate", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(txtKeyPath.Text))
+            {
+                MessageBox.Show("Please select a User Key (.key) file before connecting.",
+                    "Missing Key", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-        private void SetConnected(bool connected)
-        {
-            btnSelectProgram.Enabled = connected;
-            btnStart.Enabled = connected;
-            btnStop.Enabled = connected;
-            btnDeselect.Enabled = connected;
-            btnCancel.Enabled = connected;
-            btnCreateDirectory.Enabled = connected;
-            btnCreateFile.Enabled = connected;
-            btnDelete.Enabled = connected;
-            btnMoveOrCopy.Enabled = connected;
-            btnOpen.Enabled = connected;
-            btnClose.Enabled = connected;
-            btnReadFile.Enabled = connected;
-            btnWriteFile.Enabled = connected;
-            btnGetPosition.Enabled = connected;
-            btnSetPosition.Enabled = connected;
-
-            lblStatus.Text = connected ? "Connected" : "Disconnected";
-            lblStatus.ForeColor = connected ? Color.FromArgb(76, 175, 80) : Color.Gray;
-        }
-
-        // Existing: Connect
-
-        private void btnConnect_Click(object sender, EventArgs e)
-        {
             try
             {
+                InstallServerCertificate();
                 _client = new UaClient(
-                "MyWinFormsClient",
-                txtServer.Text,
-                true,   // security MUST be true
-                true
-                );
+                    "HeidenhainClient",
+                    txtServer.Text,
+                    true, true,
+                    txtCertPath.Text,
+                    txtKeyPath.Text);
+
                 _client.Connect(5, true);
                 SetConnected(true);
-                Log("Connected to " + txtServer.Text);
+                SetStatus("Connected to " + txtServer.Text);
+                InitializeAsync();
             }
             catch (Exception ex)
             {
                 SetConnected(false);
-                Log("Connect error: " + ex.Message);
+                SetStatus("Connect error: " + ex.Message);
                 MessageBox.Show(ex.Message, "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void btnDisconnect_Click(object sender, EventArgs e)
+        private void BtnDisconnectBar_Click(object sender, EventArgs e) => Disconnect();
+
+        private void Disconnect()
         {
-            try
-            {
-                _client?.Disconnect();
-                SetConnected(false);
-                Log("Disconnected from " + txtServer.Text);
-            }
-            catch
-            {
-                Log("Error during disconnect.");
-                MessageBox.Show("Error during disconnect.", "Disconnect Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            StopMonitor();
+            try { _client?.Disconnect(); } catch { }
+            SetConnected(false);
+            treeDevices.Nodes.Clear();
+            rtbCode.Clear();
+            lstErrors.Items.Clear();
+            _statusNodes.Clear();
+            SetStatus("Disconnected.");
         }
-        private void btnRead_Click(object sender, EventArgs e)
+
+        private void SetConnected(bool connected)
         {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            try
-            {
-                treeOpc.Nodes.Clear();
-
-                var devices = _client.Devices(true);
-
-                foreach (var device in devices)
-                {
-                    TreeNode deviceNode = new TreeNode(device.Name);
-                    deviceNode.Tag = device;
-
-                    AddGroups(deviceNode, device.Groups);
-                    //AddTags(deviceNode, device.Tags);
-
-                    treeOpc.Nodes.Add(deviceNode);
-
-                }
-                treeOpc.AfterSelect += treeOpc_AfterSelect;
-                treeOpc.CollapseAll();
-                Log("Tree loaded.");
-            }
-            catch (Exception ex)
-            {
-                Log("Read error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Read Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            lblConnectionStatus.Text = connected ? "● Connected" : "● Disconnected";
+            lblConnectionStatus.ForeColor = connected
+                ? Color.FromArgb(76, 175, 80) : Color.Gray;
         }
-        private void btnWrite_Click(object sender, EventArgs e)
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Initialize after connect
+        // ─────────────────────────────────────────────────────────────────────
+
+        private async void InitializeAsync()
         {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            if (selectedGroup == null || string.IsNullOrEmpty(txtValue.Text))
-            {
-                MessageBox.Show("Select a node and enter a value to write.");
-                return;
-            }
-
-            if (selectedGroup.NodeClass != Opc.Ua.NodeClass.Variable)
-            {
-                MessageBox.Show("Selected node is not a variable.");
-                return;
-            }
-
-            try
-            {
-                object valueToWrite = Convert.ChangeType(txtValue.Text, typeof(object));
-                _client.Write(selectedGroup, valueToWrite);
-                Log($"Wrote value '{txtValue.Text}' to {selectedGroup.Name}");
-            }
-            catch (Exception ex)
-            {
-                Log("Write error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Write Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            await LoadDeviceTreeAsync();
+            await LoadStatusNodesAsync();
+            await StartMonitorAsync();
         }
-        private void treeOpc_AfterSelect(object sender, TreeViewEventArgs e)
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Device tree
+        // ─────────────────────────────────────────────────────────────────────
+
+        private async Task LoadDeviceTreeAsync()
         {
             if (_client == null) return;
+            treeDevices.Nodes.Clear();
+            SetStatus("Loading device tree...");
 
-            if (e.Node?.Tag is Group group)
+            try
+            {
+                var devices = await Task.Run(() => _client.Devices(false));
+                if (devices == null) return;
+
+                treeDevices.BeginUpdate();
+                foreach (var dev in devices)
+                {
+                    var devNode = new TreeNode($"{dev.Name}  [{dev.Address}]") { Tag = dev };
+                    foreach (var g in dev.Groups)
+                    {
+                        var gn = new TreeNode(NodeLabel(g)) { Tag = g };
+                        if (g.NodeClass != NodeClass.Variable && g.Groups.Count == 0)
+                            gn.Nodes.Add(new TreeNode("Loading..."));
+                        else
+                            AddGroupNodes(gn, g.Groups, lazyLoad: true);
+                        devNode.Nodes.Add(gn);
+                    }
+                    treeDevices.Nodes.Add(devNode);
+                }
+                treeDevices.EndUpdate();
+                SetStatus("Device tree loaded.");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Tree load error: " + ex.Message);
+            }
+        }
+
+        private void AddGroupNodes(TreeNode parent, List<Group> groups, bool lazyLoad = false)
+        {
+            foreach (var g in groups)
+            {
+                var tn = new TreeNode(NodeLabel(g)) { Tag = g };
+                if (lazyLoad && g.NodeClass != NodeClass.Variable && g.Groups.Count == 0)
+                    tn.Nodes.Add(new TreeNode("Loading..."));
+                else
+                    AddGroupNodes(tn, g.Groups, lazyLoad);
+                parent.Nodes.Add(tn);
+            }
+        }
+
+        private static string NodeLabel(Group g)
+        {
+            string name = g.Name ?? g.Address;
+            return g.NodeClass == NodeClass.Unspecified ? name : $"{name}  [{g.NodeClass}]";
+        }
+
+        private async void TreeDevices_AfterExpand(object sender, TreeViewEventArgs e)
+        {
+            var tn = e.Node;
+            if (tn.Tag is not Group group) return;
+            if (group.NodeClass == NodeClass.Variable) return;
+            if (tn.Nodes.Count > 0 && tn.Nodes[0].Text != "Loading...") return;
+
+            tn.Nodes.Clear();
+            SetStatus($"Loading children of '{group.Name}'...");
+
+            try
+            {
+                var children = await Task.Run(() =>
+                    _client.Groups(group.Address, group.Identifier,
+                                   group.NameSpaceIndex, recursive: false));
+
+                treeDevices.BeginUpdate();
+                foreach (var child in children)
+                {
+                    var cn = new TreeNode(NodeLabel(child)) { Tag = child };
+                    if (child.NodeClass != NodeClass.Variable && child.Groups.Count == 0)
+                        cn.Nodes.Add(new TreeNode("Loading..."));
+                    else
+                        AddGroupNodes(cn, child.Groups, lazyLoad: true);
+                    tn.Nodes.Add(cn);
+                }
+                treeDevices.EndUpdate();
+                SetStatus("Ready.");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Expand error: " + ex.Message);
+                tn.Nodes.Add(new TreeNode("Loading..."));
+            }
+        }
+
+        private void TreeDevices_AfterSelect(object sender, TreeViewEventArgs e)
+        {
+            if (e.Node?.Tag is not Group group) return;
+            _selectedNode = group;
+
+            try
+            {
+                if (group.NodeClass == NodeClass.Variable)
+                {
+                    var result = _client.Read(group);
+                    rtbCode.Text =
+                        $"Source Timestamp:   {result.SourceTimestamp}\r\n" +
+                        $"Source Picoseconds: {result.SourcePicoseconds}\r\n" +
+                        $"Server Timestamp:   {result.ServerTimestamp}\r\n" +
+                        $"Server Picoseconds: {result.ServerPicoseconds}\r\n" +
+                        $"Status Code:        {result.StatusCode}\r\n" +
+                        $"Type:               {group.NodeClass}\r\n" +
+                        $"Value:              {result.Value}";
+                }
+                else if (IsNodeFile(group))
+                {
+                    ReadProgramAsync(group);
+                }
+            }
+            catch (Exception ex)
+            {
+                rtbCode.Text = "Read error: " + ex.Message;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Read program via OPC UA FileType Open / Read / Close
+        // ─────────────────────────────────────────────────────────────────────
+
+        private async void ReadProgramAsync(Group node)
+        {
+            rtbCode.Text = "// Reading program...";
+            try
+            {
+                string content = await Task.Run(() =>
+                {
+                    var fileNodeId = new NodeId((uint)node.Identifier, (ushort)node.NameSpaceIndex);
+
+                    int fileSize = -1;
+                    var sizeVar = node.Groups.FirstOrDefault(g => g.Name == "Size");
+                    if (sizeVar != null)
+                    {
+                        var sizeResult = _client.Read(sizeVar);
+                        if (sizeResult?.Value != null)
+                            fileSize = Convert.ToInt32(sizeResult.Value);
+                    }
+
+                    uint handle = _client.OpenFile(fileNodeId, "1");
+                    if (handle == 0)
+                        return "// Could not open file. It may be in use by the controller.";
+
+                    string text = _client.ReadFile(fileNodeId, handle, fileSize);
+                    _client.CloseFile(fileNodeId, handle);
+                    return string.IsNullOrEmpty(text) ? "// File is empty." : text;
+                });
+
+                rtbCode.Text = content;
+            }
+            catch (Exception ex)
+            {
+                rtbCode.Text = "// Read error: " + ex.Message;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Status nodes — load once after connect
+        // ─────────────────────────────────────────────────────────────────────
+
+        private async Task LoadStatusNodesAsync()
+        {
+            if (_client == null) return;
+            try
+            {
+                var statusGroups = await _client.GetStatusAsync();
+                SetStatusNodes(statusGroups);
+            }
+            catch { /* non-fatal */ }
+        }
+
+        public void SetStatusNodes(List<Group> statusGroups)
+        {
+            void Walk(IEnumerable<Group> groups, string path = "")
+            {
+                foreach (var g in groups ?? Enumerable.Empty<Group>())
+                {
+                    string cur = string.IsNullOrEmpty(path) ? g.Name : $"{path}/{g.Name}";
+                    _statusNodes[cur] = g;
+                    if (g.Groups?.Count > 0) Walk(g.Groups, cur);
+                }
+            }
+            _statusNodes.Clear();
+            Walk(statusGroups);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Monitor loop
+        // ─────────────────────────────────────────────────────────────────────
+
+        private async Task StartMonitorAsync()
+        {
+            _monitorCts = new CancellationTokenSource();
+            var ct = _monitorCts.Token;
+
+            while (!ct.IsCancellationRequested)
             {
                 try
                 {
-                    selectedGroup = group;
-                    var result = _client.Read(group);
-                    txtNode.Text = $"'{group.NameSpaceIndex}, {group.Identifier}'";
-                    txtValue.Text = result.Value?.ToString() ?? "null";
-                    string message = $"Source Timestamp: {result.SourceTimestamp}, " +
-                        $"\n Source Time PicoSeconds: {result.SourcePicoseconds}" +
-                        $"\n Server Timestamp: {result.ServerTimestamp}, " +
-                        $"\n Source Time PicoSeconds: {result.ServerPicoseconds}," +
-                        $"\n Status Code: {result.StatusCode}," +
-                        $"\n Type: {group.NodeClass.ToString()}," +
-                        $"\n Value: {result.Value}";
-                    ShowValue(message);
-                }
-                catch (Exception ex)
-                {
-                    ShowValue("Read error: " + ex.Message);
-                }
-            }
-        }
-        private void AddGroups(TreeNode parentNode, List<Group> groups)
-        {
-            foreach (var group in groups)
-            {
-                TreeNode groupNode = new TreeNode(group.Name);
-                groupNode.Tag = group;
-
-                AddGroups(groupNode, group.Groups);
-                //AddTags(groupNode, group.Tags);
-
-                parentNode.Nodes.Add(groupNode);
-            }
-        }
-
-        //private void AddTags(TreeNode parentNode, List<Tag> tags)
-        //{
-        //    foreach (var tag in tags)
-        //    {
-        //        TreeNode tagNode = new TreeNode(tag.Name);
-        //        tagNode.Tag = tag;
-
-        //        parentNode.Nodes.Add(tagNode);
-        //    }
-        //}
-
-
-        // New: Select Program
-
-        private void btnSelectProgram_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            // Ask the user for the full program path
-            string programPath = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the full path of the NC program to select:\n(e.g. /mnt/tnc/nc_prog/demo/Start_demo.h)",
-                "Select Program",
-                "/mnt/tnc/nc_prog/"
-            );
-
-            if (string.IsNullOrWhiteSpace(programPath))
-                return;
-
-            try
-            {
-                // Object: ns=1;i=100010  Method: ns=1;i=100012
-                var objectId = new NodeId(100007, 1);
-                var methodId = new NodeId(100012, 1);
-
-                _client.CallMethod(objectId, methodId, programPath);
-
-                Log($"SelectProgram called: {programPath}");
-                MessageBox.Show($"Program selected:\n{programPath}", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                Log("SelectProgram error: " + ex.Message);
-                MessageBox.Show(ex.Message, "SelectProgram Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnSelectProgramByNodeId_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            string input = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the file node:\n(e.g. 12345)",
-                "Select Program By NodeId",
-                ""
-            );
-
-            if (string.IsNullOrWhiteSpace(input))
-                return;
-
-            if (!uint.TryParse(input, out uint identifier))
-            {
-                MessageBox.Show("Invalid identifier. Please enter a numeric value.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(100007, 1);
-                var methodId = new NodeId(100014, 1);
-
-                // Argument is a NodeId, so we pass a NodeId object directly
-                var fileNodeId = new NodeId(identifier, 1);
-
-                _client.CallMethod(objectId, methodId, fileNodeId);
-
-                Log($"SelectProgramByNodeId called with NodeId: ns=1;i={identifier}");
-            }
-            catch (Exception ex)
-            {
-                Log("SelectProgramByNodeId error: " + ex.Message);
-                MessageBox.Show(ex.Message, "SelectProgramByNodeId Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        // Start
-        private void btnStart_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(100007, 1);
-                var methodId = new NodeId(100019, 1);
-
-                _client.CallMethod(objectId, methodId);
-
-                Log("Start called successfully.");
-            }
-            catch (Exception ex)
-            {
-                Log("Start error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Start Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        // Stop
-        private void btnStop_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(100007, 1);
-                var methodId = new NodeId(100020, 1);
-
-                _client.CallMethod(objectId, methodId);
-
-                Log("Stop called successfully.");
-            }
-            catch (Exception ex)
-            {
-                Log("Stop error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Start Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        // Reset
-        private void btnDeselect_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(100007, 1);
-                var methodId = new NodeId(100018, 1);
-
-                _client.CallMethod(objectId, methodId);
-
-                Log("Deselect called successfully.");
-            }
-            catch (Exception ex)
-            {
-                Log("Deselect error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Start Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        // Cancel
-        private void btnCancel_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(100007, 1);
-                var methodId = new NodeId(100021, 1);
-
-                _client.CallMethod(objectId, methodId);
-
-                Log("Cancel called successfully.");
-            }
-            catch (Exception ex)
-            {
-                Log("Cancel error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Start Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnCreateDirectory_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            string directoryName = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the name of the new directory:",
-                "Create Directory",
-                ""
-            );
-
-            if (string.IsNullOrWhiteSpace(directoryName))
-                return;
-
-            // This should be the NodeId of the parent directory you want to create inside.
-            // e.g. the TNC folder node from your tree browser.
-            string parentNodeInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the parent directory node:\n(e.g. 12345)",
-                "Parent Directory NodeId",
-                ""
-            );
-
-            if (!uint.TryParse(parentNodeInput, out uint parentIdentifier))
-            {
-                MessageBox.Show("Invalid identifier.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(parentIdentifier, 1);
-                var methodId = new NodeId(13387, 0); // FileDirectoryType_CreateDirectory (standard OPC UA)
-
-                var result = _client.CallMethod(objectId, methodId, directoryName);
-
-                // Output is the new directory's NodeId
-                if (result != null && result.Count > 0)
-                {
-                    var newDirNodeId = result[0] as NodeId;
-                    Log($"Directory '{directoryName}' created. NodeId: {newDirNodeId}");
-                    MessageBox.Show($"Directory created successfully.\nNodeId: {newDirNodeId}", "Success",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                else
-                {
-                    Log($"Directory '{directoryName}' created.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("CreateDirectory error: " + ex.Message);
-                MessageBox.Show(ex.Message, "CreateDirectory Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnCreateFile_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            string fileName = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the name of the new file:\n(e.g. MyProgram.h)",
-                "Create File",
-                ""
-            );
-
-            if (string.IsNullOrWhiteSpace(fileName))
-                return;
-
-            string parentNodeInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the parent directory node:",
-                "Parent Directory NodeId",
-                ""
-            );
-
-            if (!uint.TryParse(parentNodeInput, out uint parentIdentifier))
-            {
-                MessageBox.Show("Invalid identifier.");
-                return;
-            }
-
-            bool requestFileOpen = MessageBox.Show(
-                "Open the file after creation?\n(Returns a file handle for read/write operations)",
-                "Request File Open",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question) == DialogResult.Yes;
-
-            try
-            {
-                var objectId = new NodeId(parentIdentifier, 1);
-                var methodId = new NodeId(13390, 0); // FileDirectoryType_CreateFile
-
-                var result = _client.CallMethod(objectId, methodId, fileName, requestFileOpen);
-
-                if (result != null && result.Count >= 2)
-                {
-                    var fileNodeId = result[0] as NodeId;
-                    var fileHandle = Convert.ToUInt32(result[1]);
-
-                    Log($"File '{fileName}' created. NodeId: {fileNodeId}, Handle: {fileHandle}");
-                    MessageBox.Show(
-                        $"File created successfully.\nNodeId: {fileNodeId}\nFile Handle: {fileHandle}" +
-                        (requestFileOpen ? "\n\nFile is open � remember to close it when done." : ""),
-                        "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                else
-                {
-                    Log($"File '{fileName}' created.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("CreateFile error: " + ex.Message);
-                MessageBox.Show(ex.Message, "CreateFile Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnDelete_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            string parentNodeInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the parent directory node:",
-                "Parent Directory NodeId",
-                ""
-            );
-
-            if (!uint.TryParse(parentNodeInput, out uint parentIdentifier))
-            {
-                MessageBox.Show("Invalid identifier.");
-                return;
-            }
-
-            string deleteNode = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the file node:\n(e.g. 12345)",
-                "Delete File",
-                ""
-            );
-
-            if (string.IsNullOrWhiteSpace(deleteNode))
-                return;
-
-            if (!uint.TryParse(deleteNode, out uint deleteIdentifier))
-            {
-                MessageBox.Show("Invalid identifier. Please enter a numeric value.");
-                return;
-            }
-
-            try
-            {
-                var objectId = new NodeId(parentIdentifier, 1);
-                var methodId = new NodeId(13393, 0); // FileDirectoryType_CreateFile
-
-                var fileNodeId = new NodeId(deleteIdentifier, 1);
-
-                _client.CallMethod(objectId, methodId, fileNodeId);
-
-                MessageBox.Show(
-                        $"File {fileNodeId} deleted successfully from root {objectId}.",
-                        "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                Log("CreateFile error: " + ex.Message);
-                MessageBox.Show(ex.Message, "CreateFile Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnMoveOrCopy_Click(object sender, EventArgs e)
-        {
-            if (_client == null)
-            {
-                MessageBox.Show("Not connected.");
-                return;
-            }
-
-            string parentNodeInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the parent directory node:",
-                "Parent Directory NodeId",
-                ""
-            );
-
-            if (!uint.TryParse(parentNodeInput, out uint parentIdentifier))
-            {
-                MessageBox.Show("Invalid identifier.");
-                return;
-            }
-
-            string sourceInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the file/directory to move or copy:",
-                "Source NodeId",
-                ""
-            );
-
-            if (!uint.TryParse(sourceInput, out uint sourceIdentifier))
-            {
-                MessageBox.Show("Invalid source identifier.");
-                return;
-            }
-
-            string targetInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the target directory:",
-                "Target Directory NodeId",
-                ""
-            );
-
-            if (!uint.TryParse(targetInput, out uint targetIdentifier))
-            {
-                MessageBox.Show("Invalid target identifier.");
-                return;
-            }
-
-            string newName = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the new name (leave blank to keep the original name):",
-                "New Name",
-                ""
-            );
-
-            bool createCopy = MessageBox.Show(
-                "Create a copy?\n(Yes = Copy, No = Move)",
-                "Copy or Move",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question) == DialogResult.Yes;
-
-            try
-            {
-                // The object to call the method on is the SOURCE's parent directory
-                // or the root FileSystem node � use the target directory node here
-                // as MoveOrCopy is called on the FileSystem/directory object
-                var objectId = new NodeId(parentIdentifier, 1);
-                var methodId = new NodeId(13395, 0); // FileDirectoryType_MoveOrCopy
-
-                var objectToMoveOrCopy = new NodeId(sourceIdentifier, 1);
-                var targetDirectory = new NodeId(targetIdentifier, 1);
-
-                var result = _client.CallMethod(
-                    objectId,
-                    methodId,
-                    objectToMoveOrCopy,    // NodeId  - source
-                    targetDirectory,        // NodeId  - destination directory
-                    createCopy,             // Boolean - copy or move
-                    newName                 // String  - new name (empty = keep original)
-                );
-
-                if (result != null && result.Count > 0)
-                {
-                    var newNodeId = result[0] as NodeId;
-                    string operation = createCopy ? "copied" : "moved";
-                    Log($"Node {sourceIdentifier} {operation} successfully. New NodeId: {newNodeId}");
-                    MessageBox.Show(
-                        $"Operation successful.\nNew NodeId: {newNodeId}",
-                        "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("MoveOrCopy error: " + ex.Message);
-                MessageBox.Show(ex.Message, "MoveOrCopy Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnOpen_Click(object sender, EventArgs e)
-        {
-            if (_client == null) { MessageBox.Show("Not connected."); return; }
-
-            string nodeInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the numeric identifier of the file node to open:",
-                "File NodeId", ""
-            );
-            if (!uint.TryParse(nodeInput, out uint fileIdentifier)) { MessageBox.Show("Invalid identifier."); return; }
-
-            string modeInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the open mode:\n  1 = Read\n  2 = Write (append)\n  6 = Write (erase existing)",
-                "Open Mode", "1"
-            );
-            if (!byte.TryParse(modeInput, out byte mode)) { MessageBox.Show("Invalid mode."); return; }
-
-            try
-            {
-                var objectId = new NodeId(fileIdentifier, 1);
-                var methodId = new NodeId(11580, 0);
-
-                // Be explicit � wrap in Variant with correct TypeInfo
-                var inputArgs = new VariantCollection
-        {
-            new Variant(mode, new TypeInfo(BuiltInType.Byte, ValueRanks.Scalar))
-        };
-
-                _client._session.Call(
-                    null,
-                    new CallMethodRequestCollection
+                    var (errors, status) = await Task.Run(() =>
                     {
-                new CallMethodRequest
-                {
-                    ObjectId = objectId,
-                    MethodId = methodId,
-                    InputArguments = inputArgs
+                        var errs = CollectErrors();
+                        var snap = CollectStatus();
+                        return (errs, snap);
+                    }, ct);
+
+                    if (!IsHandleCreated) break;
+                    this.Invoke(() => ApplySnapshot(errors, status));
                 }
-                    },
-                    out var results,
-                    out var diagnosticInfos
-                );
+                catch (OperationCanceledException) { break; }
+                catch { /* keep polling */ }
 
-                if (results == null || results.Count == 0 || StatusCode.IsBad(results[0].StatusCode))
-                    throw new Exception($"Open failed: {results?[0].StatusCode}");
-
-                _currentFileHandle = Convert.ToUInt32(results[0].OutputArguments[0].Value);
-                _currentFileNodeId = fileIdentifier;
-
-                Log($"File opened. NodeId: ns=1;i={_currentFileNodeId}, Handle: {_currentFileHandle}");
-                MessageBox.Show($"File opened.\nHandle: {_currentFileHandle}", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                Log("Open error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Open Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                try { await Task.Delay(200, ct); }
+                catch (OperationCanceledException) { break; }
             }
         }
 
-        private void btnClose_Click(object sender, EventArgs e)
-        {
-            if (_client == null) { MessageBox.Show("Not connected."); return; }
+        // ─────────────────────────────────────────────────────────────────────
+        // Data collection — background-thread safe
+        // ─────────────────────────────────────────────────────────────────────
 
-            if (_currentFileHandle == 0 || _currentFileNodeId == 0)
-            {
-                MessageBox.Show("No file is currently open. Use Open first.");
-                return;
-            }
+        private List<ErrorEntry> CollectErrors()
+        {
+            var result = new List<ErrorEntry>();
+            if (_client == null || !_client.IsConnected) return result;
 
             try
             {
-                var objectId = new NodeId(_currentFileNodeId, 1); // called ON the file node
-                var methodId = new NodeId(11583, 0);              // FileType_Close
+                var errorGroups = _client.GetErrorsAsync().GetAwaiter().GetResult();
 
-                _client.CallMethod(objectId, methodId, _currentFileHandle);
-
-                Log($"File closed. Handle: {_currentFileHandle}");
-                MessageBox.Show("File closed successfully.", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                // Clear the stored handle
-                _currentFileHandle = 0;
-                _currentFileNodeId = 0;
-            }
-            catch (Exception ex)
-            {
-                Log("Close error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Close Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnReadFile_Click(object sender, EventArgs e)
-        {
-            if (_client == null) { MessageBox.Show("Not connected."); return; }
-
-
-            if (_currentFileHandle == 0 || _currentFileNodeId == 0)
-            {
-                MessageBox.Show("No file is currently open. Use Open first.");
-                return;
-            }
-
-            string lengthInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the number of bytes to read:\n(-1 = read entire file)",
-                "Read Length", "-1"
-            );
-            if (!int.TryParse(lengthInput, out int length)) { MessageBox.Show("Invalid length."); return; }
-
-            try
-            {
-                var objectId = new NodeId(_currentFileNodeId, 1); // called ON the file node
-                var methodId = new NodeId(11585, 0);              // FileType_Read
-
-                var result = _client.CallMethod(objectId, methodId, _currentFileHandle, length);
-
-                if (result != null && result.Count > 0)
+                foreach (var group in errorGroups.Where(g => g?.Groups != null))
                 {
-                    byte[] data = result[0] as byte[];
+                    var data = group.Groups.ToDictionary(
+                        p => p.Name,
+                        p => { try { return _client.Read(p)?.Value?.ToString(); } catch { return ""; } });
 
-                    if (data == null || data.Length == 0)
+                    string FmtEnum<T>(string key) where T : Enum
                     {
-                        ShowValue("File is empty or no data returned.");
-                        Log("Read complete � no data.");
-                        return;
+                        if (data.TryGetValue(key, out var v) && int.TryParse(v, out int i))
+                            return $"{i} ({(T)(object)i})";
+                        return "None";
                     }
 
-                    string content = System.Text.Encoding.UTF8.GetString(data);
-                    ShowValue(content);
-                    Log($"Read {data.Length} bytes from file handle {_currentFileHandle}.");
+                    result.Add(new ErrorEntry
+                    {
+                        ErrorLocation = FmtEnum<ErrorLocation>("Location"),
+                        ErrorGroup = FmtEnum<ErrorGroup>("Group"),
+                        ErrorClass = FmtEnum<ErrorClass>("Class"),
+                        Text = data.GetValueOrDefault("Text") ?? "",
+                        Internals = data.GetValueOrDefault("Internals") ?? "",
+                        Cause = data.GetValueOrDefault("Cause") ?? "",
+                        Action = data.GetValueOrDefault("Action") ?? ""
+                    });
                 }
             }
-            catch (Exception ex)
-            {
-                Log("Read error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Read Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            catch { /* swallow */ }
+
+            return result;
         }
 
-        private void btnWriteFile_Click(object sender, EventArgs e)
+        private StatusSnapshot CollectStatus()
         {
-            if (_client == null) { MessageBox.Show("Not connected."); return; }
-
-            if (_currentFileHandle == 0 || _currentFileNodeId == 0)
+            T SafeRead<T>(string path, T def = default)
             {
-                MessageBox.Show("No file is currently open. Use Open first.");
-                return;
+                if (_client == null || !_client.IsConnected) return def;
+                if (!_statusNodes.TryGetValue(path, out var node) || node == null) return def;
+                try
+                {
+                    var raw = _client.Read(node);
+                    if (raw?.Value == null) return def;
+                    if (typeof(T) == typeof(string)) return (T)(object)raw.Value.ToString()!;
+                    return (T)Convert.ChangeType(raw.Value.ToString(), typeof(T),
+                        System.Globalization.CultureInfo.InvariantCulture);
+                }
+                catch { return def; }
             }
 
-            string content = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the content to write to the file:",
-                "Write File Content", ""
-            );
+            string SafeReadEnum<T>(string path) where T : Enum
+            {
+                int val = SafeRead<int>(path, -1);
+                return (val < 0 || val > 6) ? "Unknown" : $"{val} ({(T)(object)val})";
+            }
 
-            if (content == null) return;
+            return new StatusSnapshot
+            {
+                ActiveProgram = SafeRead<string>("Program/CurrentCall", "N/A"),
+                CurrentState = SafeRead<string>("Program/ExecutionState/CurrentState", "Unknown"),
+                CurrentToolName = SafeRead<string>("CurrentTool/Name", "No Tool"),
+                CounterCurrent = SafeRead<int>("Counter/CurrentValue", -1),
+                CounterTarget = SafeRead<int>("Counter/TargetValue", -1),
+                SpindleNominalSpeed = SafeRead<double>("Spindle/NominalSpeed", -1),
+                OperationMode = SafeReadEnum<OperatingMode>("OperatingMode"),
+                FeedOverride = SafeRead<double>("FeedOverride", -1),
+                RapidOverride = SafeRead<double>("RapidOverride", -1),
+                SpeedOverride = SafeRead<double>("SpeedOverride", -1),
+            };
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Apply snapshot → UI thread only
+        // ─────────────────────────────────────────────────────────────────────
+
+        private void ApplySnapshot(List<ErrorEntry> errors, StatusSnapshot s)
+        {
+            lstErrors.Items.Clear();
+            foreach (var err in errors) lstErrors.Items.Add(err);
+
+            lblActiveProgramVal.Text = s.ActiveProgram;
+            lblCurrentStateVal.Text = s.CurrentState;
+            lblCurrentToolVal.Text = s.CurrentToolName;
+            lblCounterVal.Text = $"{s.CounterCurrent} / {s.CounterTarget}";
+            lblSpindleVal.Text = $"{s.SpindleNominalSpeed:F0} RPM";
+            lblOperationModeVal.Text = s.OperationMode;
+
+            pbFeed.Value = Clamp((int)s.FeedOverride, 0, 100);
+            pbRapid.Value = Clamp((int)s.RapidOverride, 0, 100);
+            pbSpeed.Value = Clamp((int)s.SpeedOverride, 0, 100);
+
+            lblFeedPct.Text = $"{(int)s.FeedOverride}%";
+            lblRapidPct.Text = $"{(int)s.RapidOverride}%";
+            lblSpeedPct.Text = $"{(int)s.SpeedOverride}%";
+        }
+
+        private static int Clamp(int v, int min, int max) => v < min ? min : v > max ? max : v;
+
+        private void InstallServerCertificate()
+        {
+            if (string.IsNullOrWhiteSpace(txtServerCertPath.Text))
+                return;
 
             try
             {
-                var objectId = new NodeId(_currentFileNodeId, 1);
-                var methodId = new NodeId(11588, 0); // FileType_Write (corrected)
+                string trustedFolder =
+                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    "pki", "trusted", "certs");
 
-                byte[] data = System.Text.Encoding.UTF8.GetBytes(content);
+                System.IO.Directory.CreateDirectory(trustedFolder);
 
-                var inputArgs = new VariantCollection
-        {
-            new Variant(_currentFileHandle, new TypeInfo(BuiltInType.UInt32, ValueRanks.Scalar)),
-            new Variant(data, new TypeInfo(BuiltInType.ByteString, ValueRanks.Scalar))
-        };
+                string dest =
+                    System.IO.Path.Combine(trustedFolder,
+                    System.IO.Path.GetFileName(txtServerCertPath.Text));
 
-                _client.Session.Call(
-                    null,
-                    new CallMethodRequestCollection
-                    {
-                new CallMethodRequest
-                {
-                    ObjectId = objectId,
-                    MethodId = methodId,
-                    InputArguments = inputArgs
-                }
-                    },
-                    out var results,
-                    out var diagnosticInfos
-                );
+                System.IO.File.Copy(txtServerCertPath.Text, dest, true);
 
-                if (results == null || results.Count == 0 || StatusCode.IsBad(results[0].StatusCode))
-                    throw new Exception($"Write failed: {results?[0].StatusCode}");
-
-                Log($"Wrote {data.Length} bytes to file handle {_currentFileHandle}.");
-                MessageBox.Show($"Write successful.\n{data.Length} bytes written.", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SetStatus("Server certificate installed to Trusted store.");
             }
             catch (Exception ex)
             {
-                Log("Write error: " + ex.Message);
-                MessageBox.Show(ex.Message, "Write Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(
+                    "Failed to install server certificate:\n\n" + ex.Message,
+                    "Certificate Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+        // Button handlers
+        // ─────────────────────────────────────────────────────────────────────
+
+        private async void BtnRefresh_Click(object sender, EventArgs e)
+            => await LoadDeviceTreeAsync();
+
+        private void BtnCycleStart_Click(object sender, EventArgs e)
+        {
+            if (_selectedNode == null || !IsNodeFile(_selectedNode))
+            {
+                MessageBox.Show("Select a .h program file in the tree first.",
+                    "No Program Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try
+            {
+                var objectId = new NodeId(100007, 1);
+                var fileNodeId = new NodeId((uint)_selectedNode.Identifier,
+                                             (ushort)_selectedNode.NameSpaceIndex);
+                _client.CallMethod(objectId, new NodeId(100014, 1), fileNodeId);
+                _client.CallMethod(objectId, new NodeId(100019, 1));
+                SetStatus($"Cycle Start: '{_selectedNode.Name}'");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Cycle Start error: " + ex.Message);
+                MessageBox.Show(ex.Message, "Cycle Start Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void btnGetPosition_Click(object sender, EventArgs e)
+        private void BtnCycleStop_Click(object sender, EventArgs e)
         {
-            if (_client == null) { MessageBox.Show("Not connected."); return; }
-
-            if (_currentFileHandle == 0 || _currentFileNodeId == 0)
+            try
             {
-                MessageBox.Show("No file is currently open. Use Open first.");
+                var objectId = new NodeId(100007, 1);
+                _client.CallMethod(objectId, new NodeId(100020, 1));
+                _client.CallMethod(objectId, new NodeId(100021, 1));
+                _client.CallMethod(objectId, new NodeId(100018, 1));
+                SetStatus("Cycle Stop sent.");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Cycle Stop error: " + ex.Message);
+                MessageBox.Show(ex.Message, "Cycle Stop Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void BtnSave_Click(object sender, EventArgs e)
+        {
+            if (_selectedNode == null || !IsNodeFile(_selectedNode))
+            {
+                MessageBox.Show("Select a .h program file first.", "No File",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            if (string.IsNullOrEmpty(rtbCode.Text)) return;
 
             try
             {
-                var objectId = new NodeId(_currentFileNodeId, 1);
-                var methodId = new NodeId(11590, 0); // FileType_GetPosition
-
-                var inputArgs = new VariantCollection
-        {
-            new Variant(_currentFileHandle, new TypeInfo(BuiltInType.UInt32, ValueRanks.Scalar))
-        };
-
-                _client.Session.Call(
-                    null,
-                    new CallMethodRequestCollection
-                    {
-                new CallMethodRequest
+                var fileNodeId = new NodeId((uint)_selectedNode.Identifier,
+                                             (ushort)_selectedNode.NameSpaceIndex);
+                uint handle = _client.OpenFile(fileNodeId, "6");
+                if (handle == 0)
                 {
-                    ObjectId = objectId,
-                    MethodId = methodId,
-                    InputArguments = inputArgs
+                    MessageBox.Show("Could not open file for writing. It may be in use.",
+                        "Save Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
-                    },
-                    out var results,
-                    out var diagnosticInfos
-                );
+                _client.WriteFile(fileNodeId, handle, rtbCode.Text);
+                _client.CloseFile(fileNodeId, handle);
 
-                if (results == null || results.Count == 0 || StatusCode.IsBad(results[0].StatusCode))
-                    throw new Exception($"GetPosition failed: {results?[0].StatusCode}");
-
-                ulong position = Convert.ToUInt64(results[0].OutputArguments[0].Value);
-
-                Log($"Current position: {position} bytes.");
-                MessageBox.Show($"Current file position: {position} bytes.", "GetPosition",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SetStatus($"'{_selectedNode.Name}' saved.");
+                MessageBox.Show($"'{_selectedNode.Name}' was successfully saved to the controller.",
+                    "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                Log("GetPosition error: " + ex.Message);
-                MessageBox.Show(ex.Message, "GetPosition Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetStatus("Save error: " + ex.Message);
+                MessageBox.Show(ex.Message, "Save Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void btnSetPosition_Click(object sender, EventArgs e)
+        private void BtnReconnect_Click(object sender, EventArgs e)
         {
-            if (_client == null) { MessageBox.Show("Not connected."); return; }
-
-            if (_currentFileHandle == 0 || _currentFileNodeId == 0)
-            {
-                MessageBox.Show("No file is currently open. Use Open first.");
-                return;
-            }
-
-            string positionInput = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the byte position to seek to:\n(0 = beginning of file)",
-                "Set Position", "0"
-            );
-            if (!ulong.TryParse(positionInput, out ulong position)) { MessageBox.Show("Invalid position."); return; }
-
-            try
-            {
-                var objectId = new NodeId(_currentFileNodeId, 1);
-                var methodId = new NodeId(11593, 0); // FileType_SetPosition
-
-                var inputArgs = new VariantCollection
-        {
-            new Variant(_currentFileHandle, new TypeInfo(BuiltInType.UInt32, ValueRanks.Scalar)),
-            new Variant(position, new TypeInfo(BuiltInType.UInt64, ValueRanks.Scalar))
-        };
-
-                _client._session.Call(
-                    null,
-                    new CallMethodRequestCollection
-                    {
-                new CallMethodRequest
-                {
-                    ObjectId = objectId,
-                    MethodId = methodId,
-                    InputArguments = inputArgs
-                }
-                    },
-                    out var results,
-                    out var diagnosticInfos
-                );
-
-                if (results == null || results.Count == 0 || StatusCode.IsBad(results[0].StatusCode))
-                    throw new Exception($"SetPosition failed: {results?[0].StatusCode}");
-
-                Log($"Position set to {position} bytes.");
-                MessageBox.Show($"Position set to {position} bytes.", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                Log("SetPosition error: " + ex.Message);
-                MessageBox.Show(ex.Message, "SetPosition Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            if (_client == null) { SetStatus("Not connected."); return; }
+            Disconnect();
+            Connect();
         }
 
-        // Clear Log
-        private void btnClearLog_Click(object sender, EventArgs e)
+        private void BtnDisconnectMonitor_Click(object sender, EventArgs e)
         {
-            lstLog.Items.Clear();
+            StopMonitor();
+            try { _client?.Disconnect(); } catch { }
+            treeDevices.Nodes.Clear();
+            rtbCode.Clear();
+            lstErrors.Items.Clear();
+            _statusNodes.Clear();
+            SetConnected(false);
+            SetStatus("Disconnected.");
         }
 
-        //  Cleanup on close
+        // ─────────────────────────────────────────────────────────────────────
+        // Error detail popup (double-click)
+        // ─────────────────────────────────────────────────────────────────────
+
+        private void LstErrors_DoubleClick(object sender, EventArgs e)
+        {
+            if (lstErrors.SelectedItem is not ErrorEntry err) return;
+
+            string details =
+                $"[ {err.ErrorClass} ]\r\n\r\n" +
+                $"Location:    {err.ErrorLocation}\r\n" +
+                $"Group:       {err.ErrorGroup}\r\n\r\n" +
+                $"Description: {err.Text}\r\n\r\n" +
+                $"Cause:       {err.Cause}\r\n" +
+                $"Action:      {err.Action}\r\n\r\n" +
+                $"Internals:\r\n{err.Internals}";
+
+            MessageBox.Show(details, "Error Details", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Helpers
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static bool IsNodeFile(Group node)
+        {
+            if (node?.Name == null || node.Name.Length < 2) return false;
+            string ext = node.Name.Substring(node.Name.Length - 2);
+            return ext.Equals(".h", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void SetStatus(string message)
+        {
+            if (InvokeRequired) { Invoke(() => SetStatus(message)); return; }
+            lblStatusBar.Text = " " + message;
+        }
+
+        private void StopMonitor()
+        {
+            _monitorCts?.Cancel();
+            _monitorCts = null;
+        }
+
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-            try { _client?.Disconnect(); } catch { /* ignored */ }
+            StopMonitor();
+            try { _client?.Disconnect(); } catch { }
         }
-
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Error record + enums
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public class ErrorEntry
+    {
+        public string ErrorLocation { get; set; } = "";
+        public string ErrorGroup { get; set; } = "";
+        public string ErrorClass { get; set; } = "";
+        public string Text { get; set; } = "";
+        public string Internals { get; set; } = "";
+        public string Cause { get; set; } = "";
+        public string Action { get; set; } = "";
+
+        public override string ToString() => string.IsNullOrEmpty(Text) ? "(no text)" : Text;
+    }
+
+    public enum ErrorLocation { None = 0, Machine = 1, Edit = 2, Oem = 3 }
+    public enum ErrorGroup { None = 0, Operating = 1, Programming = 2, Plc = 3, General = 4, Remote = 5, Python = 6 }
+    public enum ErrorClass { None = 0, Warning = 1, FeedHold = 2, ProgramHold = 3, ProgramAbort = 4, EmergencyStop = 5, Reset = 6, Info = 7, Error = 8, Note = 9 }
 }
