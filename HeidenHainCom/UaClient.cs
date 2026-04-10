@@ -287,6 +287,9 @@ namespace OPCUaClient
         public DataValue Read(Group grp)
         {
             WaitForReconnect();
+            var currentSession = _session;
+            if (currentSession == null || !currentSession.Connected)
+                throw new ServerException("Not connected to server.");
             var readValues = new ReadValueIdCollection
             {
                 new ReadValueId
@@ -295,7 +298,7 @@ namespace OPCUaClient
                     AttributeId = Attributes.Value
                 }
             };
-            _session!.Read(null, 0, TimestampsToReturn.Both, readValues,
+            currentSession!.Read(null, 0, TimestampsToReturn.Both, readValues,
                 out DataValueCollection dataValues, out _);
             return dataValues[0];
         }
@@ -303,6 +306,9 @@ namespace OPCUaClient
         public void Write(Group grp, object value)
         {
             WaitForReconnect();
+            var currentSession = _session;
+            if (currentSession == null || !currentSession.Connected)
+                throw new ServerException("Not connected to server.");
             var writeValues = new WriteValueCollection
             {
                 new WriteValue
@@ -312,7 +318,7 @@ namespace OPCUaClient
                     Value       = new DataValue { Value = value }
                 }
             };
-            _session!.Write(null, writeValues, out StatusCodeCollection statusCodes, out _);
+            currentSession!.Write(null, writeValues, out StatusCodeCollection statusCodes, out _);
             if (!StatusCode.IsGood(statusCodes[0]))
                 throw new WriteException("Write failed. Code: " + statusCodes[0].Code);
         }
@@ -344,7 +350,7 @@ namespace OPCUaClient
             if (results == null || results.Count == 0)
                 throw new Exception("No result returned from method call.");
             if (StatusCode.IsBad(results[0].StatusCode))
-                throw new Exception($"Method call failed: {results[0].StatusCode}");
+                throw new Exception($"Method call failed: {results[0].StatusCode} \n {objectId}, {methodId}");
 
             return results[0].OutputArguments.Select(v => v.Value).ToList();
         }
